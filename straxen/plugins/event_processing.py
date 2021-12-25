@@ -792,21 +792,28 @@ class EventShadow(strax.Plugin):
     It also gives the position infomation of the previous S2s
     and main peaks' shadow.
     """
-    __version__ = '0.0.8'
+    __version__ = '0.1.0'
     depends_on = ('event_basics', 'peak_basics', 'peak_shadow')
     provides = 'event_shadow'
     save_when = strax.SaveWhen.EXPLICIT
 
     def infer_dtype(self):
-        dtype = [('s1_shadow', np.float32, 'main s1 shadow [PE/ns]'),
-                 ('s2_shadow', np.float32, 'main s2 shadow [PE/ns]'),
-                 ('shadow', np.float32, 'shadow of event [PE/ns]'),
-                 ('pre_s2_area', np.float32, 'previous s2 area [PE]'),
-                 ('shadow_dt', np.int64, 'time difference to the previous s2 [ns]'),
-                 ('shadow_index', np.int32, 'max shadow peak index in event'),
-                 ('pre_s2_x', np.float32, 'x of previous s2 peak causing shadow [cm]'),
-                 ('pre_s2_y', np.float32, 'y of previous s2 peak causing shadow [cm]'),
-                 ('shadow_distance', np.float32, 'distance to the s2 peak with max shadow [cm]')]
+        dtype = []
+        for s in ['s1', 's2']:
+            for p in ['s1', 's2']:
+                dtype.append(((s + '_shadow_' + p, 'main ' + s + ' shadow from ' + p + ' [PE/ns]'), np.float32))
+                dtype.append(((s + '_pre_area_' + p, 'previous ' + p + ' area cast on ' + s + ' [PE]'), np.float32))
+                dtype.append(((s + '_shadow_dt_' + p, 'time difference from ' + s + ' to the previous ' + p + ' [ns]'), np.int64))
+        for p in ['s1', 's2']:
+            dtype.append((('shadow_' + p, 'event shadow from ' + p + ' [PE/ns]'), np.float32))
+            dtype.append((('pre_area_' + p, 'previous ' + p + ' area cast on the event [PE]'), np.float32))
+            dtype.append((('shadow_dt_' + p, 'time difference from the event to the previous ' + p + ' [ns]'), np.int64))
+
+        for s, r in zip(['', 'alt_'], ['1st', '2nd']):
+            for x in ['x', 'y']:
+                dtype.append(((s + 'pre_' + x + '_s2', x + ' of previous ' + r + ' big s2 peak causing shadow [cm]'), np.float32))
+            dtype.append(((s + 'shadow_distance', 'distance to the s2 peak with ' + r + ' max shadow [cm]'), np.float32))
+        dtype.append((('shadow_index', 'max shadow peak index in event'), np.int32))
         dtype += strax.time_fields
         return dtype
 
@@ -815,26 +822,25 @@ class EventShadow(strax.Plugin):
         res = np.zeros(len(events), self.dtype)
 
         res['shadow_index'] = -1
-        res['pre_s2_x'] = np.nan
-        res['pre_s2_y'] = np.nan
+        res['pre_x_s2'] = np.nan
+        res['pre_y_s2'] = np.nan
 
         for event_i, (event, sp) in enumerate(zip(events, split_peaks)):
-            if event['s1_index'] >= 0:
-                res['s1_shadow'][event_i] = sp['shadow'][event['s1_index']]
-            if event['s2_index'] >= 0:
-                res['s2_shadow'][event_i] = sp['shadow'][event['s2_index']]
+            indices = [event['s1_index'], event['s2_index'], np.argwhere(sp['type'] == 2)[0] if (sp['type'] == 2).sum() > 0 else -1]
+            for idx, key in zip(indices, ['s1_', 's2_', '']):
+                if idx >= 0:
+                    for s in ['s1', 's2']:
+                        res[key + 'shadow_' + s][event_i] = sp['shadow_' + s][idx]
+                        res[key + 'pre_area_' + s][event_i] = sp['pre_area_' + s][idx]
+                        res[key + 'shadow_dt_' + s][event_i] = sp['shadow_dt_' + s][idx]
             if (sp['type'] == 2).sum() > 0:
-                # Define event shadow as the first S2 peak shadow
-                first_s2_index = np.argwhere(sp['type'] == 2)[0]
-                res['shadow_index'][event_i] = first_s2_index
-                res['shadow'][event_i] = sp['shadow'][first_s2_index]
-                res['pre_s2_area'][event_i] = sp['pre_s2_area'][first_s2_index]
-                res['shadow_dt'][event_i] = sp['shadow_dt'][first_s2_index]
-                res['pre_s2_x'][event_i] = sp['pre_s2_x'][first_s2_index]
-                res['pre_s2_y'][event_i] = sp['pre_s2_y'][first_s2_index]
-        res['shadow_distance'] = ((res['pre_s2_x'] - events['s2_x'])**2 +
-                                  (res['pre_s2_y'] - events['s2_y'])**2
-                                  )**0.5
+                res['shadow_index'][event_i] = indices[-1]
+                for p in ['', 'alt_']:
+                    for x in ['x', 'y']:
+                        res[p + 'pre_' + x + '_s2'][event_i] = sp[p + 'pre_' + x + '_s2'][indices[-1]]
+        for s in ['', 'alt_']:
+            res[s + 'shadow_distance'] = ((res[s + 'pre_x_s2'] - events['s2_x'])**2 + 
+                                          (res[s + 'pre_y_s2'] - events['s2_y'])**2) ** 0.5
         res['time'] = events['time']
         res['endtime'] = strax.endtime(events)
         return res

@@ -334,22 +334,17 @@ class PeakProximity(strax.OverlapWindowPlugin):
 
 @export
 @strax.takes_config(
-    strax.Option(name='pre_s2_area_threshold', default=1000,
+    strax.Option(name='pre_s1_area_threshold', default=1e3,
+                 help='Only take S1s larger than this into account '
+                      'when calculating PeakShadow [PE]'),
+    strax.Option(name='pre_s2_area_threshold', default=1e4,
                  help='Only take S2s larger than this into account '
                       'when calculating PeakShadow [PE]'),
     strax.Option(name='deltatime_exponent', default=-1.0,
                  help='The exponent of delta t when calculating shadow'),
-    strax.Option('time_window_backward', default=int(3e9),
-                 help='Search for S2s causing shadow in this time window [ns]'),
-    strax.Option(name='electron_drift_velocity',
-                 default=('electron_drift_velocity', 'ONLINE', True),
-                 help='Vertical electron drift velocity in cm/ns (1e4 m/ms)'),
-    strax.Option(name='max_drift_length', default=straxen.tpc_z,
-                 help='Total length of the TPC from the bottom of gate to the '
-                      'top of cathode wires [cm]'),
-    strax.Option(name='exclude_drift_time', default=False,
-                 help='Subtract max drift time to avoid peak interference in '
-                      'a single event [ns]'))
+    strax.Option(name='time_window_backward', default=int(3e9),
+                 help='Search for S2s causing shadow in this time window [ns]')
+)
 class PeakShadow(strax.OverlapWindowPlugin):
     """
     This plugin can find and calculate the previous S2 shadow at peak level,
@@ -364,70 +359,88 @@ class PeakShadow(strax.OverlapWindowPlugin):
 
     def setup(self):
         self.time_window_backward = self.config['time_window_backward']
-        if self.config['exclude_drift_time']:
-            electron_drift_velocity = straxen.get_correction_from_cmt(
-                self.run_id,
-                self.config['electron_drift_velocity'])
-            drift_time_max = int(self.config['max_drift_length'] / electron_drift_velocity)
-            self.n_drift_time = drift_time_max
-        else:
-            self.n_drift_time = 0
-        self.s2_threshold = self.config['pre_s2_area_threshold']
+        self.threshold = dict(s1=self.config['pre_s1_area_threshold'], s2=self.config['pre_s2_area_threshold'])
         self.exponent = self.config['deltatime_exponent']
 
     def get_window_size(self):
         return 3 * self.config['time_window_backward']
 
+    @property
+    def sdtype(self):
+        return [('shadow', np.float32), ('pre_area', np.float32), ('shadow_dt', np.int64)]
+
+    @property
+    def ddtype(self):
+        ddtype = []
+        for s in ['', 'alt_']:
+            for x in ['x', 'y']:
+                ddtype.append((s + 'pre_' + x, np.float32))
+        return ddtype
+
     def infer_dtype(self):
-        dtype = [('shadow', np.float32, 'previous s2 shadow [PE/ns]'),
-                 ('pre_s2_area', np.float32, 'previous s2 area [PE]'),
-                 ('shadow_dt', np.int64, 'time difference to the previous s2 [ns]'),
-                 ('pre_s2_x', np.float32, 'x of previous s2 peak causing shadow [cm]'),
-                 ('pre_s2_y', np.float32, 'y of previous s2 peak causing shadow [cm]')]
-        dtype += strax.time_fields
+        s1_dtype = []
+        s2_dtype = []
+        for s, l in zip(['s1', 's2'], [s1_dtype, s2_dtype]):
+            l.append((('shadow_' + s, 'previous ' + s + ' shadow [PE/ns]'), np.float32))
+            l.append((('pre_area_' + s, 'previous ' + s + ' area [PE]'), np.float32))
+            l.append((('shadow_dt_' + s, 'time difference to the previous ' + s + ' peak [ns]'), np.int64))
+        for s, r in zip(['', 'alt_'], ['1st', '2nd']):
+            for x in ['x', 'y']:
+                s2_dtype.append(((s + 'pre_' + x + '_s2', x + ' of previous s2 peak causing ' + r + ' largest shadow [cm]'), np.float32))
+        dtype = s1_dtype + s2_dtype + strax.time_fields
         return dtype
 
     def compute(self, peaks):
-        roi_shadow = np.zeros(len(peaks), dtype=strax.time_fields)
-        roi_shadow['time'] = peaks['center_time'] - self.time_window_backward
-        roi_shadow['endtime'] = peaks['center_time'] - self.n_drift_time
+        return self.compute_s1_s2(peaks, peaks)
 
-        mask_pre_s2 = peaks['area'] > self.s2_threshold
-        mask_pre_s2 &= peaks['type'] == 2
-        split_peaks = strax.touching_windows(peaks[mask_pre_s2], roi_shadow)
-        res = np.zeros(len(peaks), self.dtype)
-        res['pre_s2_x'] = np.nan
-        res['pre_s2_y'] = np.nan
-        if len(peaks):
-            self.compute_shadow(peaks, peaks[mask_pre_s2], split_peaks, self.exponent, res)
+    def compute_s1_s2(self, peaks, current):
+        roi_shadow = np.zeros(len(current), dtype=strax.time_fields)
+        roi_shadow['time'] = current['center_time'] - self.time_window_backward
+        roi_shadow['endtime'] = current['center_time']
 
-        res['time'] = peaks['time']
-        res['endtime'] = strax.endtime(peaks)
+        resdict = dict()
+        for stype, key in zip([1, 2], ['s1', 's2']):
+            mask_pre = (peaks['type'] == stype) & (peaks['area'] > self.threshold[key])
+            split_peaks = strax.touching_windows(peaks[mask_pre], roi_shadow)
+            array = np.zeros(len(current), np.dtype(self.sdtype + self.ddtype))
+            for s in ['', 'alt_']:
+                for x in ['x', 'y']:
+                    array[s + 'pre_' + x] = np.nan
+            array['shadow_dt'] = self.time_window_backward
+            if len(current):
+                self.compute_shadow(current, peaks[mask_pre], split_peaks, self.exponent, array)
+            resdict[key] = array
+        res = np.zeros(len(current), self.dtype)
+        for key, names in zip(['s1', 's2'], [np.dtype(self.sdtype).names, np.dtype(self.sdtype + self.ddtype).names]):
+            for name in names:
+                res[name + '_' + key] = resdict[key][name]
+        res['time'] = current['time']
+        res['endtime'] = strax.endtime(current)
         return res
 
     @staticmethod
     @numba.njit
-    def compute_shadow(peaks, pre_s2_peaks, touching_windows, exponent, res):
+    def compute_shadow(peaks, pre_peaks, touching_windows, exponent, res):
         """
-        For each peak in peaks, check if there is a shadow-casting S2 peak
-        and check if it casts the largest shadow
+        For each peak in peaks, check if there is a shadow-casting peak
+        and check if it casts the first or second largest shadow
         """
         for p_i, p_a in enumerate(peaks):
             # reset for every peak
-            new_shadow = 0
-            s2_indices = touching_windows[p_i]
-            for s2_idx in range(s2_indices[0], s2_indices[1]):
-                s2_a = pre_s2_peaks[s2_idx]
-                if p_a['center_time'] - s2_a['center_time'] <= 0:
+            indices = touching_windows[p_i]
+            for idx in range(indices[0], indices[1]):
+                s_a = pre_peaks[idx]
+                if p_a['center_time'] - s_a['center_time'] <= 0:
                     continue
-                new_shadow = s2_a['area'] * (
-                        p_a['center_time'] - s2_a['center_time'])**exponent
+                new_shadow = s_a['area'] * (p_a['center_time'] - s_a['center_time'])**exponent
                 if new_shadow > res['shadow'][p_i]:
+                    res['alt_pre_x'][p_i] = res['pre_x'][p_i]
+                    res['alt_pre_y'][p_i] = res['pre_y'][p_i]
+                    res['pre_x'][p_i] = s_a['x']
+                    res['pre_y'][p_i] = s_a['y']
                     res['shadow'][p_i] = new_shadow
-                    res['pre_s2_area'][p_i] = s2_a['area']
-                    res['shadow_dt'][p_i] = p_a['center_time'] - s2_a['center_time']
-                    res['pre_s2_x'][p_i] = s2_a['x']
-                    res['pre_s2_y'][p_i] = s2_a['y']
+                    res['pre_area'][p_i] = s_a['area']
+                    res['shadow_dt'][p_i] = p_a['center_time'] - s_a['center_time']
 
 
 @export
