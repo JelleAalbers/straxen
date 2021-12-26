@@ -343,13 +343,13 @@ class PeakProximity(strax.OverlapWindowPlugin):
     strax.Option(name='deltatime_exponent', default=-1.0,
                  help='The exponent of delta t when calculating shadow'),
     strax.Option(name='time_window_backward', default=int(3e9),
-                 help='Search for S2s causing shadow in this time window [ns]')
+                 help='Search for peaks causing shadow in this time window [ns]')
 )
 class PeakShadow(strax.OverlapWindowPlugin):
     """
-    This plugin can find and calculate the previous S2 shadow at peak level,
-    with time window backward and previous S2 area as options.
-    It also gives the area and position information of these previous S2s.
+    This plugin can find and calculate the previous peak shadow at peak level,
+    with time window backward and previous peak area as options.
+    It also gives the area and position information of these previous peaks.
     """
 
     __version__ = '0.1.0'

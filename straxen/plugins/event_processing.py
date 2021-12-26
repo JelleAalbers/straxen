@@ -785,15 +785,15 @@ class EnergyEstimates(strax.Plugin):
 @export
 @strax.takes_config(
     strax.Option(name='time_window_backward', default=int(3e9),
-                 help='Search for S2s causing shadow in this time window [ns]')
+                 help='Search for peaks causing shadow in this time window [ns]')
 )
 class EventShadow(strax.Plugin):
     """
     This plugin can calculate shadow at event level.
     It depends on peak-level shadow.
-    The event-level shadow is its first S2 peak's shadow.
-    If no S2 peaks, the event shadow will be nan.
-    It also gives the position infomation of the previous S2s
+    The event-level shadow is its first peak peak's shadow.
+    If no peaks, the event shadow will be 0.
+    It also gives the position infomation of the previous peaks
     and main peaks' shadow.
     """
     __version__ = '0.1.0'
