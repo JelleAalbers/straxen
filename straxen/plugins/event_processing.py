@@ -783,6 +783,10 @@ class EnergyEstimates(strax.Plugin):
 
 
 @export
+@strax.takes_config(
+    strax.Option(name='time_window_backward', default=int(3e9),
+                 help='Search for S2s causing shadow in this time window [ns]')
+)
 class EventShadow(strax.Plugin):
     """
     This plugin can calculate shadow at event level.
@@ -817,9 +821,15 @@ class EventShadow(strax.Plugin):
         dtype += strax.time_fields
         return dtype
 
+    def setup(self):
+        self.time_window_backward = self.config['time_window_backward']
+
     def compute(self, events, peaks):
         split_peaks = strax.split_by_containment(peaks, events)
         res = np.zeros(len(events), self.dtype)
+        for key in ['s1_', 's2_', '']:
+            for s in ['s1', 's2']:
+                res[key + 'shadow_dt_' + s] = self.time_window_backward
 
         res['shadow_index'] = -1
         res['pre_x_s2'] = np.nan
