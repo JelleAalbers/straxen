@@ -805,19 +805,19 @@ class EventShadow(strax.Plugin):
         dtype = []
         for s in ['s1', 's2']:
             for p in ['s1', 's2']:
-                dtype.append(((s + '_shadow_' + p, 'main ' + s + ' shadow from ' + p + ' [PE/ns]'), np.float32))
-                dtype.append(((s + '_pre_area_' + p, 'previous ' + p + ' area cast on ' + s + ' [PE]'), np.float32))
-                dtype.append(((s + '_shadow_dt_' + p, 'time difference from ' + s + ' to the previous ' + p + ' [ns]'), np.int64))
+                dtype.append((('main ' + s + ' shadow from ' + p + ' [PE/ns]', s + '_shadow_' + p), np.float32))
+                dtype.append((('previous ' + p + ' area cast on ' + s + ' [PE]', s + '_pre_area_' + p), np.float32))
+                dtype.append((('time difference from ' + s + ' to the previous ' + p + ' [ns]', s + '_shadow_dt_' + p), np.int64))
         for p in ['s1', 's2']:
-            dtype.append((('shadow_' + p, 'event shadow from ' + p + ' [PE/ns]'), np.float32))
-            dtype.append((('pre_area_' + p, 'previous ' + p + ' area cast on the event [PE]'), np.float32))
-            dtype.append((('shadow_dt_' + p, 'time difference from the event to the previous ' + p + ' [ns]'), np.int64))
+            dtype.append((('event shadow from ' + p + ' [PE/ns]', 'shadow_' + p), np.float32))
+            dtype.append((('previous ' + p + ' area cast on the event [PE]', 'pre_area_' + p), np.float32))
+            dtype.append((('time difference from the event to the previous ' + p + ' [ns]', 'shadow_dt_' + p), np.int64))
 
         for s, r in zip(['', 'alt_'], ['1st', '2nd']):
             for x in ['x', 'y']:
-                dtype.append(((s + 'pre_' + x + '_s2', x + ' of previous ' + r + ' big s2 peak causing shadow [cm]'), np.float32))
-            dtype.append(((s + 'shadow_distance', 'distance to the s2 peak with ' + r + ' max shadow [cm]'), np.float32))
-        dtype.append((('shadow_index', 'max shadow peak index in event'), np.int32))
+                dtype.append(((x + ' of previous ' + r + ' big s2 peak causing shadow [cm]', s + 'pre_' + x + '_s2'), np.float32))
+            dtype.append((('distance to the s2 peak with ' + r + ' max shadow [cm]', s + 'shadow_distance'), np.float32))
+        dtype.append((('max shadow peak index in event', 'shadow_index'), np.int32))
         dtype += strax.time_fields
         return dtype
 

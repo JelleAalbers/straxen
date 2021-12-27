@@ -381,12 +381,12 @@ class PeakShadow(strax.OverlapWindowPlugin):
         s1_dtype = []
         s2_dtype = []
         for s, l in zip(['s1', 's2'], [s1_dtype, s2_dtype]):
-            l.append((('shadow_' + s, 'previous ' + s + ' shadow [PE/ns]'), np.float32))
-            l.append((('pre_area_' + s, 'previous ' + s + ' area [PE]'), np.float32))
-            l.append((('shadow_dt_' + s, 'time difference to the previous ' + s + ' peak [ns]'), np.int64))
+            l.append((('previous ' + s + ' shadow [PE/ns]', 'shadow_' + s), np.float32))
+            l.append((('previous ' + s + ' area [PE]', 'pre_area_' + s), np.float32))
+            l.append((('time difference to the previous ' + s + ' peak [ns]', 'shadow_dt_' + s), np.int64))
         for s, r in zip(['', 'alt_'], ['1st', '2nd']):
             for x in ['x', 'y']:
-                s2_dtype.append(((s + 'pre_' + x + '_s2', x + ' of previous s2 peak causing ' + r + ' largest shadow [cm]'), np.float32))
+                s2_dtype.append(((x + ' of previous s2 peak causing ' + r + ' largest shadow [cm]', s + 'pre_' + x + '_s2'), np.float32))
         dtype = s1_dtype + s2_dtype + strax.time_fields
         return dtype
 
