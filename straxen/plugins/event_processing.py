@@ -795,6 +795,10 @@ class EventShadow(strax.Plugin):
     If no peaks, the event shadow will be 0.
     It also gives the position infomation of the previous peaks
     and main peaks' shadow.
+    References:
+        * v0.0.0 reference: xenon:xenonnt:kexin:s2_shadow_cut
+        * v0.0.1 reference: xenon:xenonnt:kexin:sr0_shadow_cut
+        * v0.1.0 reference: xenon:xenonnt:ac:prediction:shadow_refactor
     """
     __version__ = '0.1.0'
     depends_on = ('event_basics', 'peak_basics', 'peak_shadow')
