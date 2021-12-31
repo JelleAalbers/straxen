@@ -351,8 +351,6 @@ class PeakShadow(strax.OverlapWindowPlugin):
     with time window backward and previous peak area as options.
     It also gives the area and position information of these previous peaks.
     References:
-        * v0.0.0 reference: xenon:xenonnt:kexin:s2_shadow_cut
-        * v0.0.1 reference: xenon:xenonnt:kexin:sr0_shadow_cut
         * v0.1.0 reference: xenon:xenonnt:ac:prediction:shadow_refactor
     """
 

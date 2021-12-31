@@ -796,8 +796,6 @@ class EventShadow(strax.Plugin):
     It also gives the position infomation of the previous peaks
     and main peaks' shadow.
     References:
-        * v0.0.0 reference: xenon:xenonnt:kexin:s2_shadow_cut
-        * v0.0.1 reference: xenon:xenonnt:kexin:sr0_shadow_cut
         * v0.1.0 reference: xenon:xenonnt:ac:prediction:shadow_refactor
     """
     __version__ = '0.1.0'
