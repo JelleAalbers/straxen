@@ -3,6 +3,7 @@ import os
 import tempfile
 import numpy as np
 import numba
+from scipy.stats import halfnorm
 from enum import IntEnum
 
 import strax
@@ -342,8 +343,10 @@ class PeakProximity(strax.OverlapWindowPlugin):
                       'when calculating PeakShadow [PE]'),
     strax.Option(name='deltatime_exponent', default=-1.0,
                  help='The exponent of delta t when calculating shadow'),
-    strax.Option(name='time_window_backward', default=int(3e9),
-                 help='Search for peaks causing shadow in this time window [ns]')
+    strax.Option(name='time_window_backward', default=int(1e9),
+                 help='Search for peaks casting shadow in this time window [ns]'),
+    strax.Option(name='position_correlation_sigma', default=45.281,
+                 help='Fitted position correlation using in shadow ordering [cm*PE^0.5]')
 )
 class PeakShadow(strax.OverlapWindowPlugin):
     """
@@ -351,25 +354,30 @@ class PeakShadow(strax.OverlapWindowPlugin):
     with time window backward and previous peak area as options.
     It also gives the area and position information of these previous peaks.
     References:
-        * v0.1.0 reference: xenon:xenonnt:ac:prediction:shadow_refactor
+        * v0.1.0 reference: 
     """
 
     __version__ = '0.1.0'
     depends_on = ('peak_basics', 'peak_positions')
     provides = 'peak_shadow'
+    data_kind = 'peaks'
     save_when = strax.SaveWhen.EXPLICIT
 
     def setup(self):
         self.time_window_backward = self.config['time_window_backward']
-        self.threshold = dict(s1=self.config['pre_s1_area_threshold'], s2=self.config['pre_s2_area_threshold'])
+        self.threshold = dict(s1=self.config['pre_s1_area_threshold'], s2=self.config['pre_s2_area_threshold'], s2_re=self.config['pre_s2_area_threshold'])
         self.exponent = self.config['deltatime_exponent']
+        self.sigma = self.config['position_correlation_sigma']
 
     def get_window_size(self):
         return 3 * self.config['time_window_backward']
 
     @property
     def sdtype(self):
-        return [('shadow', np.float32), ('pre_area', np.float32), ('shadow_dt', np.int64)]
+        ddtype = []
+        for s in ['', 'alt_']:
+            ddtype += [(s + 'shadow', np.float32), (s + 'pre_area', np.float32), (s + 'shadow_dt', np.int64)]
+        return ddtype
 
     @property
     def ddtype(self):
@@ -382,14 +390,19 @@ class PeakShadow(strax.OverlapWindowPlugin):
     def infer_dtype(self):
         s1_dtype = []
         s2_dtype = []
-        for s, l in zip(['s1', 's2'], [s1_dtype, s2_dtype]):
-            l.append((('previous ' + s + ' shadow [PE/ns]', 'shadow_' + s), np.float32))
-            l.append((('previous ' + s + ' area [PE]', 'pre_area_' + s), np.float32))
-            l.append((('time difference to the previous ' + s + ' peak [ns]', 'shadow_dt_' + s), np.int64))
-        for s, r in zip(['', 'alt_'], ['1st', '2nd']):
+        s2_reordered_dtype = []
+        s2_corr_dtype = []
+        for sa, r in zip(['', 'alt_'], ['1st', '2nd']):
+            for si, s, l in zip(['s1', 's2', 's2 reordered'], ['s1', 's2', 's2_re'], [s1_dtype, s2_dtype, s2_reordered_dtype]):
+                l.append((('previous ' + si + ' casted ' + r + ' largest shadow [PE/ns]', sa + 'shadow_' + s), np.float32))
+                l.append((('previous ' + si + ' area casting ' + r + ' largest shadow [PE]', sa + 'pre_area_' + s), np.float32))
+                l.append((('time difference to the previous ' + si + ' peak casting ' + r + ' largest shadow [ns]', sa + 'shadow_dt_' + s), np.int64))
             for x in ['x', 'y']:
-                s2_dtype.append(((x + ' of previous s2 peak causing ' + r + ' largest shadow [cm]', s + 'pre_' + x + '_s2'), np.float32))
-        dtype = s1_dtype + s2_dtype + strax.time_fields
+                s2_dtype.append(((x + ' of previous s2 peak casting ' + r + ' largest shadow [cm]', sa + 'pre_' + x + '_s2'), np.float32))
+                s2_reordered_dtype.append(((x + ' of previous s2 reordered peak casting ' + r + ' largest shadow [cm]', sa + 'pre_' + x + '_s2_re'), np.float32))
+            s2_corr_dtype.append((('previous ' + r + ' largest s2 shadow with position correlation [PE/ns]', sa + 'shadow_s2_corr'), np.float32))
+            s2_corr_dtype.append((('previous ' + r + ' largest s2 shadow position correlation CDF', sa + 'shadow_s2_cdf'), np.float32))
+        dtype = s1_dtype + s2_dtype + s2_reordered_dtype + s2_corr_dtype + strax.time_fields
         return dtype
 
     def compute(self, peaks):
@@ -401,47 +414,74 @@ class PeakShadow(strax.OverlapWindowPlugin):
         roi_shadow['endtime'] = current['center_time']
 
         resdict = dict()
-        for stype, key in zip([1, 2], ['s1', 's2']):
+        for stype, key, reorder in zip([2, 2, 1], ['s2_re', 's2', 's1'], [True, False, False]):
             mask_pre = (peaks['type'] == stype) & (peaks['area'] > self.threshold[key])
             split_peaks = strax.touching_windows(peaks[mask_pre], roi_shadow)
             array = np.zeros(len(current), np.dtype(self.sdtype + self.ddtype))
-            for s in ['', 'alt_']:
+            for sa in ['', 'alt_']:
                 for x in ['x', 'y']:
-                    array[s + 'pre_' + x] = np.nan
-            array['shadow_dt'] = self.time_window_backward
+                    array[sa + 'pre_' + x] = np.nan
+                array[sa + 'shadow_dt'] = self.time_window_backward
+                array[sa + 'pre_area'] = self.threshold[key]
+                array[sa + 'shadow'] = array[sa + 'pre_area'] * array[sa + 'shadow_dt'] ** self.exponent
             if len(current):
-                self.compute_shadow(current, peaks[mask_pre], split_peaks, self.exponent, array)
+                self.compute_shadow(current, peaks[mask_pre], split_peaks, self.exponent, array, reorder, self.getsigma(self.sigma, current['area']))
             resdict[key] = array
         res = np.zeros(len(current), self.dtype)
-        for key, names in zip(['s1', 's2'], [np.dtype(self.sdtype).names, np.dtype(self.sdtype + self.ddtype).names]):
+        for key, names in zip(['s1', 's2', 's2_re'], 
+                              [np.dtype(self.sdtype).names, 
+                               np.dtype(self.sdtype + self.ddtype).names, 
+                               np.dtype(self.sdtype + self.ddtype).names]):
             for name in names:
                 res[name + '_' + key] = resdict[key][name]
+        for sa in ['', 'alt_']:
+            distance = np.sqrt((res[sa + 'pre_x_s2_re'] - current['x']) ** 2 + (res[sa + 'pre_y_s2_re'] - current['y']) ** 2)
+            distance = np.where(np.isnan(distance), 2 * straxen.tpc_r, distance)
+            res[sa + 'shadow_s2_cdf'] = 1 - halfnorm.cdf(distance, scale=self.getsigma(self.sigma, current['area']))
+            res[sa + 'shadow_s2_corr'] = res[sa + 'shadow_s2_re'] * res[sa + 'shadow_s2_cdf']
+        res['time'] = current['time']
         res['time'] = current['time']
         res['endtime'] = strax.endtime(current)
         return res
 
     @staticmethod
+    def getsigma(sigma, s2):
+        return sigma / np.sqrt(s2)
+
+    @staticmethod
     @numba.njit
-    def compute_shadow(peaks, pre_peaks, touching_windows, exponent, res):
+    def compute_shadow(peaks, pre_peaks, touching_windows, exponent, res, pos_corr, sigmas=None):
         """
         For each peak in peaks, check if there is a shadow-casting peak
         and check if it casts the first or second largest shadow
         """
-        for p_i, p_a in enumerate(peaks):
+        for p_i, (p_a, sigma) in enumerate(zip(peaks, sigmas)):
             # reset for every peak
             indices = touching_windows[p_i]
+            shadow_ref_bk = 0
             for idx in range(indices[0], indices[1]):
                 s_a = pre_peaks[idx]
                 if p_a['center_time'] - s_a['center_time'] <= 0:
                     continue
                 new_shadow = s_a['area'] * (p_a['center_time'] - s_a['center_time'])**exponent
-                if new_shadow > res['shadow'][p_i]:
+                if pos_corr and p_a['type'] == 2:
+                    distance = np.sqrt((p_a['x'] - s_a['x']) ** 2 + (p_a['y'] - s_a['y']) ** 2)
+                    distance = np.where(np.isnan(distance), 2 * straxen.tpc_r, distance)
+                    # shadow_ref = np.exp(new_shadow) / sigma * np.exp(-0.5 * distance ** 2 / sigma ** 2)
+                    shadow_ref = new_shadow / sigma * np.exp(-0.5 * distance ** 2 / sigma ** 2)
+                else:
+                    shadow_ref = new_shadow
+                if shadow_ref > shadow_ref_bk:
+                    shadow_ref_bk = shadow_ref
                     res['alt_pre_x'][p_i] = res['pre_x'][p_i]
                     res['alt_pre_y'][p_i] = res['pre_y'][p_i]
                     res['pre_x'][p_i] = s_a['x']
                     res['pre_y'][p_i] = s_a['y']
+                    res['alt_shadow'][p_i] = res['shadow'][p_i]
                     res['shadow'][p_i] = new_shadow
+                    res['alt_pre_area'][p_i] = res['pre_area'][p_i]
                     res['pre_area'][p_i] = s_a['area']
+                    res['alt_shadow_dt'][p_i] = res['shadow_dt'][p_i]
                     res['shadow_dt'][p_i] = p_a['center_time'] - s_a['center_time']
 
 
